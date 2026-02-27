@@ -1,8 +1,13 @@
-# All Project Scripts & Configurations
+# Explicación de los Scripts
 
-This document contains all the source code and configuration files for the Retail Big Data Analytics pipeline.
+### 1. `docker-compose.yml` (El Orquestador)
 
-## 1. Infrastructure (Docker Compose)
+Este archivo es la columna vertebral de la infraestructura. Se encarga de descargar, configurar y conectar todos los servicios en una red virtual aislada.
+
+* **Servicios base:** Despliega contenedores para Zookeeper (coordinación), Kafka (streaming), NameNode y DataNode (almacenamiento HDFS), y MySQL (base de datos relacional).
+* **Servicios de ingesta y visualización:** Incluye contenedores específicos para Flume, Sqoop, Kafka UI y el Dashboard en Python.
+* **Mapeo de puertos:** Define cómo la máquina host se comunica con los contenedores; por ejemplo, mapea el puerto interno 3306 de MySQL al puerto externo 13307 de tu computadora.
+
 **File**: `docker-compose.yml`
 ```yaml
 version: "3"
@@ -139,7 +144,15 @@ volumes:
   mysql_data:
 ```
 
-## 2. Dashboard Application
+### 2. `dashboard/app.py` (La Capa de Consumo)
+
+Esta es la aplicación web interactiva construida con Streamlit que actúa como la "Capa de Servicio" (Serving Layer).
+
+* **Conexiones:** Utiliza `SQLAlchemy` para conectarse a MySQL y extraer la historia, y `kafka-python` para suscribirse al flujo de datos en vivo.
+* **Pestaña "Historical Analysis":** Ejecuta una consulta SQL simple (`SELECT * FROM sales`) y utiliza la librería `plotly` para renderizar gráficos de barras y tortas basados en el tamaño de las ventas y los tipos de productos.
+* **Pestaña "Real-Time Stream":** Se conecta al tópico de Kafka y extrae un lote de los mensajes más recientes cada vez que se actualiza, calculando el valor total de esas transacciones recientes.
+* **Pestaña "System Health":** Utiliza la librería `kazoo` para conectarse a Zookeeper y verificar la cantidad de brokers y tópicos activos, además de hacer un ping a los puertos de los demás servicios.
+
 **File**: `dashboard/app.py`
 ```python
 import streamlit as st
@@ -339,7 +352,14 @@ with tab3:
                 st.markdown(f"**{name}**: :red[Offline] ❌")
 ```
 
-## 3. Data Generation (Producer)
+### 3. `datagen/producer.py` (El Generador de Eventos)
+
+Este script de Python simula el comportamiento de los clientes comprando en una tienda en tiempo real.
+
+* **Generación de datos:** Crea diccionarios JSON aleatorios que incluyen un ID de orden, un monto, un estado de envío y un ID de cliente.
+* **Doble salida:** Envía cada transacción al tópico `transactions` en Kafka para el procesamiento en tiempo real.
+* **Simulación de Logs:** Simultáneamente, escribe esa misma transacción en un archivo de texto plano (`logs/app.log`) para simular los registros internos de un servidor web.
+ 
 **File**: `datagen/producer.py`
 ```python
 import time
@@ -404,7 +424,13 @@ if __name__ == "__main__":
     generate_transactions()
 ```
 
-## 4. Database Setup
+### 4. `datagen/setup_db.py` (El Sembrador de la Capa Batch)
+
+Este archivo se ejecuta una sola vez al inicio del proyecto para simular que la empresa ya tiene años de historia acumulada.
+
+* **Procesamiento con Pandas:** Lee un archivo local llamado `sales_data_sample.csv` y limpia los nombres de las columnas para asegurar compatibilidad con la base de datos.
+* **Inserción masiva:** Utiliza el método `to_sql` para crear la tabla `sales` dentro del contenedor de MySQL e insertar todos los registros del CSV de forma automática.
+
 **File**: `datagen/setup_db.py`
 ```python
 import pandas as pd
@@ -450,7 +476,13 @@ if __name__ == "__main__":
     seeding()
 ```
 
-## 5. Sqoop Import Script (ETL)
+### 5. `scripts/run_sqoop_import.sh` (ETL)
+
+Este script de Bash ejecuta el comando de Sqoop que extrae los datos de MySQL y los guarda de forma distribuida.
+
+* **Configuración del entorno:** Define las variables de Hadoop y crea un archivo de configuración temporal (`core-site.xml`) para que Sqoop sepa cómo encontrar el NameNode en el puerto 9000.
+* **Comando de importación:** Se conecta a la base de datos `retail_db` usando las credenciales root, selecciona la tabla `sales` y define la ruta de destino en HDFS (`/user/sqoop/sales`).
+
 **File**: `scripts/run_sqoop_import.sh`
 ```bash
 #!/bin/bash
@@ -491,7 +523,14 @@ sqoop import \
   --m 1
 ```
 
-## 6. Flume Configuration
+### 6. `conf/flume.conf` (El Agente de Recolección de Logs)
+
+Este archivo de propiedades define el comportamiento del contenedor de Flume para el transporte continuo de datos no estructurados.
+
+* **Source (Origen):** Está configurado como tipo `exec` para ejecutar el comando de Linux `tail -F` sobre el archivo `app.log`, capturando cada nueva línea que el `producer.py` escribe.
+* **Channel (Canal):** Utiliza la memoria RAM (`memory`) para almacenar temporalmente los eventos antes de enviarlos, lo que permite un procesamiento muy rápido.
+* **Sink (Destino):** Está configurado para conectarse a HDFS y agrupar los registros de texto, creando un nuevo archivo cada 30 segundos (rollInterval) en la ruta `/user/flume/logs/`.
+* 
 **File**: `conf/flume.conf`
 ```properties
 # Flume Component Naming

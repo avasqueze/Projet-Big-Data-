@@ -6,6 +6,7 @@ import time
 import json
 from kafka import KafkaConsumer
 from kazoo.client import KazooClient
+from kafka import TopicPartition
 
 # Page Config
 st.set_page_config(page_title="Retail Analytics Dashboard", layout="wide", page_icon="📈")
@@ -152,22 +153,42 @@ with tab2:
         if st.button("Fetch Latest Stream"):
            st.rerun()
 
-    # Create a consumer on the fly to get latest messages
+    # Create a consumer on the fly
     consumer = get_kafka_consumer()
     
     if consumer:
         messages = []
-        # Poll for a few messages
-        # Note: In a real app we might use a background thread or st_autorefresh. 
-        # Here we just fetch what's currently available in the buffer/recent.
-        records = consumer.poll(timeout_ms=2000, max_records=20)
+        topic_name = 'transactions'
         
-        for topic_partition, consumer_records in records.items():
-            for record in consumer_records:
-                messages.append(record.value)
+        # 1. Ask Kafka for the partitions in this topic
+        partitions = consumer.partitions_for_topic(topic_name)
+        
+        if partitions:
+            # 2. Manually assign the consumer to partition 0
+            # (Based on the Kafka UI, this topic has 1 partition)
+            tp = TopicPartition(topic_name, list(partitions)[0])
+            consumer.assign([tp])
+            
+            # 3. Find the absolute last offset in the topic
+            end_offsets = consumer.end_offsets([tp])
+            end_offset = end_offsets[tp]
+            
+            # 4. Calculate where to start reading (end minus 30)
+            start_offset = max(0, end_offset - 30)
+            consumer.seek(tp, start_offset)
+            
+            # 5. Poll exactly those last 30 messages
+            records = consumer.poll(timeout_ms=2000, max_records=30)
+            
+            for topic_partition, consumer_records in records.items():
+                for record in consumer_records:
+                    messages.append(record.value)
+                    
+            # 6. Reverse the list so the newest transaction is at the top of the UI
+            messages.reverse()
         
         if messages:
-            st.success(f"Captured {len(messages)} recent events.")
+            st.success(f"Captured the {len(messages)} most recent events.")
             df_stream = pd.DataFrame(messages)
             
             # Show Data
@@ -179,7 +200,7 @@ with tab2:
             c_rt2.metric("Most Common Status", df_stream['status'].mode()[0] if not df_stream.empty else "N/A")
             
         else:
-            st.info("No new messages found in this poll window. (Ensure Producer is running)")
+            st.info("No new messages found. (Ensure Producer is running)")
         
         consumer.close()
     else:
